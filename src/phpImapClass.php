@@ -2,34 +2,38 @@
 
 Class phpImap
 {
-    //---Configuration -----------------------
-    private $server   = 'imap.gmail.com';
-    private $user     = '';
-    private $pass     = '';
-    private $folder   = 'INBOX';
-    //---End Config --------------------------
+    //--- Configuration -----------------------
+    private $host   = 'imap.gmail.com';
+    private $user   = '';
+    private $pass   = '';
+    private $folder = 'INBOX';
+    //--- End Config --------------------------
+    private $port   = '993';
+    private $flags  = '/imap/ssl/novalidate-cert';
 
     private $mbox;
-    private $emails;
+    private $emails = array();
     public  $header;
     public  $timestamp;
     public  $subject;
-    public  $from;
     public  $fromname;
     public  $fromemail;
     public  $body;
     public  $attachments;
 
-    public function __construct($server = null,
-                                $user = null, $pass = null, $folder = null)
+    public function __construct($host = null, $user = null, $pass = null,
+                                $folder = null)
     {
-        if ($server) $this->server = $server;
+        if ($host)   $this->host   = $host;
         if ($user)   $this->user   = $user;
         if ($pass)   $this->pass   = $pass;
         if ($folder) $this->folder = $folder;
+        $this->folder = imap_utf8_to_mutf7($folder);
 
-        $mailbox = '{'.$this->server.':993/imap/ssl/novalidate-cert}'.$this->folder;
-        $this->mbox = imap_open($mailbox, $this->user, $this->pass);
+        $mailbox = '{'.$this->host.':'.$this->port.$this->flags.'}'.$this->folder;
+        $this->mbox = @imap_open($mailbox, $this->user, $this->pass);
+        if (!$this->mbox)
+            exit(imap_last_error());        
     }
 
     public function close()
@@ -37,9 +41,24 @@ Class phpImap
         imap_close($this->mbox);
     }
 
+    public function listFolders()
+    {
+        $hoststr = '{'.$this->host.'}';
+        echo '<b>'.$hoststr.'</b> folders:<br>';
+        $list = imap_list($this->mbox, $hoststr, '*');
+        $newlist = array();
+        foreach($list as $key => $folder) {
+            $newlist[] = str_replace($hoststr, '', imap_mutf7_to_utf8($folder));
+        }
+        foreach($newlist as $item)
+            echo '&nbsp;&nbsp;'.$item.'<br>';
+    }
+
     public function loadEmails($criteria = 'ALL', $descending = true)
     {
         $emails = imap_search($this->mbox, $criteria);
+            if (!$emails)
+                exit('Invalid mailbox. Can not load emails.');
         if ($descending === true)
             $this->emails = array_reverse($emails);
         else
@@ -56,26 +75,51 @@ Class phpImap
         }
     }
 
-    public function listEmails()
+    public function overView()
     {
-        echo '<style>
-        table {border-collapse: collapse; margin: auto;}
-        td {border: 1px solid black; padding: 0px 6px;}
-        </style>';
-        echo '<table>';
-        echo '<tr><th>Num</th><th>Date</th><th>Att</th><th>From name</th>
-                <th>From email</th><th>Subject</th></tr>';
+?>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                table {border-collapse: collapse; margin: auto;}
+                td    {border: 1px solid black; padding: 0px 6px;}
+            </style>
+        </head>
+        <body>
+            <table>
+            <tr><th>Nr</th><th>Date</th><th>Att</th><th>From name</th>
+                    <th>From email</th><th>Subject</th></tr>
+<?php
+            foreach($this->emails as $num) {
+                $this->loadHeader($num);
+                $att = $this->hasAttachments($num);
+                echo '<tr><td>'.$num.'</td>';
+                echo '<td>'.date('Y-m-d', $this->timestamp).'</td>';
+                echo '<td>'.$att.'</td>';
+                echo '<td>'.$this->fromname.'</td>';
+                echo '<td>'.$this->fromemail.'</td>';
+                echo '<td>'.$this->subject.'</td></tr>'."\n";
+            }
+?>
+            </table>
+        </body>
+        </html>
+
+<?php
+    }
+
+    public function downloadAttachments($directory)
+    {
+        if (!is_dir($directory))
+            exit('Error: Invalid attachments directory');
         foreach($this->emails as $num) {
-            $this->loadHeader($num);
-            $att = $this->hasAttachments($num);
-            echo '<tr><td>'.$num.'</td>';
-            echo '<td>'.date('Y-m-d', $this->timestamp).'</td>';
-            echo '<td>'.$att.'</td>';
-            echo '<td>'.$this->fromname.'</td>';
-            echo '<td>'.$this->fromemail.'</td>';
-            echo '<td>'.$this->subject.'</td></tr>';
+            if ($this->hasAttachments($num)) {
+                $this->loadAttachments($num, $directory);
+            }
         }
-        echo '</table>';
+        echo 'Success!<br>
+            Download completed into <b>"'.$directory.'"</b> directory.';
     }
 
     public function displayEmail($num)
@@ -85,8 +129,8 @@ Class phpImap
         echo '<b>'.date('Y-m-d', $this->timestamp).' : ';
         echo $this->subject.'<br>';
         echo $this->fromname.' : ';
-        echo $this->fromemail.'</b><br>';
-        echo $this->body.'<hr>';
+        echo $this->fromemail.'</b><br>'."\n";
+        echo $this->body.'<hr>'."\n\n";
     }
 
     public function loadHeader($num)
@@ -97,12 +141,12 @@ Class phpImap
             $this->subject = imap_utf8($this->header->subject);
         else
             $this->subject = 'No Subject';
-        $this->from      = $this->header->from[0];
-        if (isset($this->from->personal))
-            $this->fromname = imap_utf8($this->from->personal);
+        $from = $this->header->from[0];
+        if (isset($from->personal))
+            $this->fromname = imap_utf8($from->personal);
         else
             $this->fromname = 'No Name';
-        $this->fromemail = $this->from->mailbox.'@'.$this->from->host;
+        $this->fromemail = $from->mailbox.'@'.$from->host;
         return $this->header;
     }
 
@@ -115,10 +159,10 @@ Class phpImap
         return $this->body;
     }
 
-    public function loadAttachments($num, $dir = false)
+    public function loadAttachments($num, $directory = false)
     {
         $this->attachments = array();
-        if ($dir && !is_dir($dir))
+        if ($directory && !is_dir($directory))
             exit('Error: Invalid attachments directory');
         $struct = imap_fetchstructure($this->mbox, $num);
         if (isset($struct->parts)) {
@@ -138,8 +182,8 @@ Class phpImap
                         'name' => $fname,
                         'file' => $file
                     ); 
-                if ($dir) {
-                    file_put_contents($dir.'/'.$fname, $file);
+                if ($directory) {
+                    file_put_contents($directory.'/'.$fname, $file);
                 }
                         }
                     }
